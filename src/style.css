@@ -830,7 +830,7 @@ textarea:focus-visible {
 
 .modal-backdrop {
   position:fixed;
-  z-index:5;
+  z-index:60;
   inset:0;
   display:grid;
   place-items:center;
@@ -844,6 +844,8 @@ textarea:focus-visible {
   gap:16px;
   max-height:90svh;
   overflow:auto;
+  overscroll-behavior:contain;
+  padding-bottom:max(12px, env(safe-area-inset-bottom));
 }
 
 .client-form input,
@@ -1728,12 +1730,12 @@ textarea:focus-visible {
 
   .bottom-nav {
     position:fixed;
-    z-index:5;
+    z-index:20;
     right:0;
     bottom:0;
     left:0;
     display:grid;
-    grid-template-columns:repeat(4,1fr);
+    grid-template-columns:repeat(4, minmax(0, 1fr));
     min-height:64px;
     padding:9px 8px calc(9px + env(safe-area-inset-bottom));
     border-top:1px solid var(--line);
@@ -1741,9 +1743,13 @@ textarea:focus-visible {
     box-shadow:0 -8px 24px rgba(23,63,95,.08);
   }
 
+  body:has(.modal-backdrop) .bottom-nav {
+    display:none !important;
+  }
+
   .bottom-nav-item {
     display:grid;
-    justify-items:center;
+    place-items:center;
     gap:4px;
     min-height:44px;
     color:var(--muted);
@@ -1751,6 +1757,9 @@ textarea:focus-visible {
     border:0;
     background:none;
     font-size:10px;
+    line-height:1.2;
+    text-align:center;
+    padding:4px 2px;
     transition:color .2s ease,transform .1s ease;
   }
 
@@ -1767,6 +1776,10 @@ textarea:focus-visible {
     transform:translateY(-2px);
   }
 
+  .bottom-nav.hidden {
+  display: none !important;
+}
+
   .modal-backdrop {
     align-items:end;
     padding:0;
@@ -1779,13 +1792,17 @@ textarea:focus-visible {
     border-radius:18px 18px 0 0;
     box-shadow:0 -12px 40px rgba(15,40,54,.18);
     animation:sheet-up .22s ease-out;
+    position:relative;
   }
 
   .client-form .form-actions {
     position:sticky;
     bottom:0;
-    padding-top:12px;
-    background:linear-gradient(transparent,rgba(255,255,255,.98) 18%);
+    z-index:1;
+    margin:0 -20px;
+    padding:12px 20px calc(12px + env(safe-area-inset-bottom));
+    background:linear-gradient(180deg, rgba(255,255,255,0) 0%, rgba(255,255,255,.98) 20%, rgba(255,255,255,.98) 100%);
+    border-top:1px solid rgba(220,229,227,.9);
   }
 
   .invoice-toolbar {
