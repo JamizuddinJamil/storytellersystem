@@ -392,7 +392,11 @@ onUnmounted(() => {
         <RouterView />
       </section>
 
-      <nav class="bottom-nav" aria-label="Mobile navigation">
+      <nav
+        class="bottom-nav"
+        :class="{ 'bottom-nav--hidden': mobileMenuOpen }"
+        aria-label="Mobile navigation"
+      >
         <RouterLink
           v-for="item in navigation.slice(0, 4)"
           :key="item.to"
