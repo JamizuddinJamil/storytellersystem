@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { supabase } from './lib/supabase'
 import {
@@ -167,12 +167,26 @@ const navigation = computed(() => {
   ]
 })
 
-onMounted(async () => {
+let authSubscription: { subscription: { unsubscribe: () => void } } | null = null
+
+function resetSessionState() {
+  role.value = 'manager'
+  actualRole.value = ''
+  userName.value = ''
+  userRoles.value = []
+  hasManagerAccess.value = false
+}
+
+async function loadCurrentUserSession() {
+  resetSessionState()
+
   const {
     data: { user },
   } = await supabase.auth.getUser()
 
-  if (!user) return
+  if (!user) {
+    return
+  }
 
   const metaName =
     user.user_metadata?.full_name ||
@@ -252,6 +266,22 @@ onMounted(async () => {
   if (activeRole && roleMap[activeRole]) {
     role.value = roleMap[activeRole]
   }
+}
+
+onMounted(async () => {
+  await loadCurrentUserSession()
+
+  const { data } = supabase.auth.onAuthStateChange(async (event) => {
+    if (event === 'SIGNED_IN' || event === 'SIGNED_OUT' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
+      await loadCurrentUserSession()
+    }
+  })
+
+  authSubscription = data
+})
+
+onUnmounted(() => {
+  authSubscription?.subscription.unsubscribe()
 })
 </script>
 

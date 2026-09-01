@@ -1,13 +1,12 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
-import { ArrowRight, LockKeyhole, Mail, UserRound } from '@lucide/vue'
+import {
+  ArrowRight,
+  LockKeyhole,
+  Mail,
+} from '@lucide/vue'
 import { supabase } from '../lib/supabase'
 
-const router = useRouter()
-
-const mode = ref<'login' | 'register'>('login')
-const fullName = ref('')
 const email = ref('')
 const password = ref('')
 const busy = ref(false)
@@ -27,7 +26,10 @@ const dashboardRoutes: Record<string, string> = {
 }
 
 function getDashboardRoute(role: string | null | undefined) {
-  return dashboardRoutes[String(role ?? '').toLowerCase()] ?? '/manager/dashboard'
+  return (
+    dashboardRoutes[String(role ?? '').trim().toLowerCase()] ??
+    '/manager/dashboard'
+  )
 }
 
 async function submit() {
@@ -38,80 +40,157 @@ async function submit() {
   error.value = ''
 
   try {
-    // Register
-    if (mode.value === 'register') {
-      const result = await supabase.auth.signUp({
-        email: email.value.trim(),
+    const cleanEmail = email.value.trim().toLowerCase()
+
+    if (!cleanEmail || !password.value) {
+      error.value = 'Please enter your email and password.'
+      return
+    }
+
+    // --------------------------------------------------
+    // IMPORTANT:
+    // Clear any existing Supabase session first.
+    //
+    // This prevents the previous account/session from
+    // remaining active while another user is logging in.
+    // --------------------------------------------------
+    const { error: signOutError } = await supabase.auth.signOut()
+
+    if (signOutError) {
+      console.warn(
+        'Could not clear previous session:',
+        signOutError.message,
+      )
+    }
+
+    // --------------------------------------------------
+    // Login
+    // --------------------------------------------------
+    const { data, error: loginError } =
+      await supabase.auth.signInWithPassword({
+        email: cleanEmail,
         password: password.value,
-        options: { data: { full_name: fullName.value.trim() } },
       })
 
-      if (result.error) {
-        error.value = result.error.message
-        return
-      }
-
-      if (!result.data.session) {
-        message.value = 'Check your email to confirm your account, then sign in.'
-        return
-      }
-
-      await router.push('/manager/dashboard') // first registered account
+    if (loginError) {
+      error.value = loginError.message
       return
     }
 
-    // Login
-    const result = await supabase.auth.signInWithPassword({
-      email: email.value.trim(),
-      password: password.value,
-    })
+    const user = data.user
 
-    if (result.error) {
-      error.value = result.error.message
-      return
-    }
-
-    const user = result.data.user
     if (!user) {
-      error.value = 'Login succeeded, but no user session was returned.'
+      error.value =
+        'Login succeeded, but no user session was returned.'
       return
     }
 
-    // Get profile + role (explicit FK hint avoids ambiguity with profile_roles junction table)
-    const { data: profile, error: profileError } = await supabase
+    // --------------------------------------------------
+    // Make sure the new session is actually available
+    // before loading the user's profile.
+    // --------------------------------------------------
+    const {
+      data: sessionData,
+      error: sessionError,
+    } = await supabase.auth.getSession()
+
+    if (sessionError) {
+      error.value =
+        `Login succeeded, but the session could not be verified: ${sessionError.message}`
+      return
+    }
+
+    const sessionUser = sessionData.session?.user
+
+    if (!sessionUser) {
+      error.value =
+        'Login succeeded, but the active session could not be verified.'
+      return
+    }
+
+    // Safety check:
+    // Make sure the active session belongs to the account
+    // that just logged in.
+    if (sessionUser.id !== user.id) {
+      error.value =
+        'The active session does not match the account that just logged in. Please try again.'
+      return
+    }
+
+    // --------------------------------------------------
+    // Load Storyteller profile + role
+    // --------------------------------------------------
+    const {
+      data: profile,
+      error: profileError,
+    } = await supabase
       .from('profiles')
       .select(`
         id,
+        auth_user_id,
         full_name,
         role_id,
-        roles!profiles_role_id_fkey ( id, name )
+        roles!profiles_role_id_fkey (
+          id,
+          name
+        )
       `)
-      .eq('auth_user_id', user.id)
+      .eq('auth_user_id', sessionUser.id)
       .maybeSingle()
 
     if (profileError) {
-      error.value = `Login succeeded, but your profile could not be loaded: ${profileError.message}`
+      error.value =
+        `Login succeeded, but your profile could not be loaded: ${profileError.message}`
       return
     }
 
     if (!profile) {
-      error.value = 'Login succeeded, but no Storyteller profile is linked to this account.'
+      error.value =
+        'Login succeeded, but no Storyteller profile is linked to this account.'
       return
     }
 
-    // Generated types may still say array even though FK embed returns one row
-    const roleRow = Array.isArray(profile.roles) ? profile.roles[0] : profile.roles
-    const role = String(roleRow?.name ?? '').toLowerCase()
+    // --------------------------------------------------
+    // Resolve role
+    // --------------------------------------------------
+    const roleRow = Array.isArray(profile.roles)
+      ? profile.roles[0]
+      : profile.roles
+
+    const role = String(
+      roleRow?.name ?? '',
+    )
+      .trim()
+      .toLowerCase()
 
     if (!role) {
-      error.value = 'Your Storyteller profile does not have a valid role assigned.'
+      error.value =
+        'Your Storyteller profile does not have a valid role assigned.'
       return
     }
 
-    await router.push(getDashboardRoute(role))
+    const dashboardRoute = getDashboardRoute(role)
+
+    // --------------------------------------------------
+    // Prevent stale dashboard/account state.
+    //
+    // A normal router.push() can sometimes leave existing
+    // application state mounted. Reloading the application
+    // after authentication guarantees that:
+    //
+    // - the new Supabase session is used
+    // - the new user's profile is loaded
+    // - the previous user's dashboard state is cleared
+    // - role-based navigation starts from a clean state
+    // --------------------------------------------------
+    window.location.replace(dashboardRoute)
   } catch (caught) {
     console.error('Authentication failed:', caught)
-    error.value = caught instanceof Error ? caught.message : 'Something went wrong while signing in.'
+
+    error.value =
+      caught instanceof Error
+        ? caught.message
+        : 'Something went wrong while signing in.'
   } finally {
     busy.value = false
   }
@@ -121,64 +200,101 @@ async function submit() {
 <template>
   <main class="auth-page">
     <section class="auth-panel">
+
+      <!-- Brand -->
       <div class="brand auth-brand">
         <span class="brand-mark">S</span>
         <span>Storyteller</span>
       </div>
 
-      <p class="eyebrow">Production workspace</p>
-
-      <h1>{{ mode === 'login' ? 'Welcome back' : 'Create the first account' }}</h1>
-
-      <p class="auth-intro">
-        {{ mode === 'login'
-          ? 'Sign in to continue managing your productions.'
-          : 'The first account is automatically assigned Manager access.' }}
+      <p class="eyebrow">
+        Production workspace
       </p>
 
-      <form class="auth-form" @submit.prevent="submit">
-        <label v-if="mode === 'register'">
-          <span>Full name</span>
-          <div class="input-wrap">
-            <UserRound :size="17" />
-            <input v-model="fullName" required autocomplete="name" placeholder="Your name" />
-          </div>
-        </label>
+      <h1>
+        Welcome back
+      </h1>
 
+      <p class="auth-intro">
+        Sign in to continue managing your productions.
+      </p>
+
+      <!-- Login Form -->
+      <form
+        class="auth-form"
+        @submit.prevent="submit"
+      >
+
+        <!-- Email -->
         <label>
           <span>Email</span>
+
           <div class="input-wrap">
             <Mail :size="17" />
-            <input v-model="email" required type="email" autocomplete="email" placeholder="you@company.com" />
+
+            <input
+              v-model="email"
+              required
+              type="email"
+              autocomplete="username"
+              placeholder="you@company.com"
+              :disabled="busy"
+            />
           </div>
         </label>
 
+        <!-- Password -->
         <label>
           <span>Password</span>
+
           <div class="input-wrap">
             <LockKeyhole :size="17" />
-            <input v-model="password" required minlength="8" type="password" autocomplete="current-password" placeholder="At least 8 characters" />
+
+            <input
+              v-model="password"
+              required
+              minlength="8"
+              type="password"
+              autocomplete="current-password"
+              placeholder="Enter your password"
+              :disabled="busy"
+            />
           </div>
         </label>
 
-        <p v-if="error" class="form-message form-message--error">{{ error }}</p>
-        <p v-if="message" class="form-message">{{ message }}</p>
+        <!-- Error -->
+        <p
+          v-if="error"
+          class="form-message form-message--error"
+        >
+          {{ error }}
+        </p>
 
-        <button class="primary-button auth-submit" :disabled="busy" type="submit">
-          {{ busy ? 'Please wait...' : mode === 'login' ? 'Sign in' : 'Register as Manager' }}
+        <!-- Message -->
+        <p
+          v-if="message"
+          class="form-message"
+        >
+          {{ message }}
+        </p>
+
+        <!-- Submit -->
+        <button
+          class="primary-button auth-submit"
+          :disabled="busy"
+          type="submit"
+        >
+          {{
+            busy
+              ? 'Signing in...'
+              : 'Sign in'
+          }}
+
           <ArrowRight :size="17" />
         </button>
+
       </form>
 
-      <button
-        class="auth-toggle"
-        type="button"
-        @click="mode = mode === 'login' ? 'register' : 'login'; error = ''; message = ''"
-      >
-        {{ mode === 'login'
-          ? 'First time here? Register the Manager account'
-          : 'Already registered? Sign in' }}
-      </button>
     </section>
   </main>
 </template>
