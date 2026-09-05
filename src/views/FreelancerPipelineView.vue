@@ -140,7 +140,7 @@ async function loadPipeline() {
       `)
       .eq('user_id', profile.id)
       .eq('role', role.value)
-      .neq('status', 'CANCELLED')
+      .in('status', ['CONFIRMED', 'ACTIVE', 'COMPLETED'])
       .order('event_date', { ascending: true })
 
     if (assignmentError) {

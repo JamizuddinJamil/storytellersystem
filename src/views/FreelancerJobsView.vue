@@ -25,7 +25,18 @@ const compensationFor = (jobId: string) => { const item = requirements.value.fin
 
 async function load() {
   error.value = ''
-  const { data: profile } = await supabase.from('profiles').select('id').maybeSingle()
+
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) { error.value = 'Not signed in.'; return }
+
+  const { data: profile, error: profileError } = await supabase
+    .from('profiles')
+    .select('id')
+    .eq('auth_user_id', user.id)
+    .maybeSingle()
+
+  if (profileError) { error.value = profileError.message; return }
+
   const [jobResult, requirementResult, assignmentResult] = await Promise.all([
     supabase.from('jobs').select('id, job_number, event_type, event_date, event_location, status, production_brief').in('status', ['POST_PRODUCTION_SETUP', 'PRODUCTION']).order('event_date'),
     supabase.from('job_requirements').select('job_id, role, quantity, compensation_type, compensation_value').eq('role', role.value),

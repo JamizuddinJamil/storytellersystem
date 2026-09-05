@@ -10,7 +10,14 @@ const assignmentIds = ref<Record<string, string>>({})
 const assignedRoles = computed(() => role.value === 'editor' ? ['VIDEO_EDITOR'] : role.value === 'photographer' ? ['PHOTOGRAPHER'] : ['VIDEOGRAPHER'])
 
 async function load() {
-  const { data: profile } = await supabase.from('profiles').select('id').maybeSingle()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) { error.value = 'Not signed in.'; return }
+
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('id')
+    .eq('auth_user_id', user.id)
+    .maybeSingle()
   if (!profile) return
   const { data: assignments, error: assignmentError } = await supabase.from('job_assignments').select('id, job_id, role').eq('user_id', profile.id).in('role', assignedRoles.value).in('status', ['CONFIRMED', 'ACTIVE'])
   if (assignmentError) { error.value = assignmentError.message; return }

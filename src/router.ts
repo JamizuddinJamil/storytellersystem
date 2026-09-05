@@ -12,7 +12,7 @@ import JobsView from './views/JobsView.vue'
 import FreelancerJobsView from './views/FreelancerJobsView.vue'
 import FreelancerPipelineView from './views/FreelancerPipelineView.vue'
 import ProductionWorkflowView from './views/ProductionWorkflowView.vue'
-import PaymentsView from './views/PaymentsView.vue'
+import PayoutsView from './views/PayoutsView.vue'
 import SettingsView from './views/SettingsView.vue'
 import AffiliateWalletView from './views/AffiliateWalletView.vue'
 import { supabase } from './lib/supabase'
@@ -125,9 +125,28 @@ const routes = [
 
   {
     path: '/manager/payments',
-    component: PaymentsView,
+    redirect: '/manager/payouts',
     meta: {
       title: 'Affiliate payments',
+      role: 'manager',
+      managerOnly: true,
+    },
+  },
+
+  {
+    path: '/manager/affiliate-wallet',
+    redirect: '/manager/payouts',
+    meta: {
+      title: 'Affiliate wallet',
+      role: 'manager',
+    },
+  },
+
+  {
+    path: '/manager/payouts',
+    component: PayoutsView,
+    meta: {
+      title: 'Payouts & Revenue',
       role: 'manager',
       managerOnly: true,
     },
@@ -242,6 +261,14 @@ const routes = [
     },
   },
 
+  {
+    path: '/sales/jobs',
+    component: JobsView,
+    meta: {
+      title: 'Jobs',
+      role: 'sales',
+    },
+  },
 
   // --------------------------------------------------
   // DEVELOPER

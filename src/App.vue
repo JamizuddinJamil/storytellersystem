@@ -1,17 +1,17 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { supabase } from './lib/supabase'
 import {
   BriefcaseBusiness,
   CheckCircle2,
-  CircleDollarSign,
   ClipboardList,
   FileCheck2,
   Film,
   LayoutDashboard,
   LogOut,
   Menu,
+  MoreHorizontal,
   Package,
   Settings,
   ShieldCheck,
@@ -27,6 +27,15 @@ type Role =
   | 'videographer'
   | 'photographer'
   | 'editor'
+
+const roleMap: Record<string, Role> = {
+  DEVELOPER: 'developer',
+  MANAGER: 'manager',
+  SALESMAN: 'sales',
+  VIDEOGRAPHER: 'videographer',
+  PHOTOGRAPHER: 'photographer',
+  VIDEO_EDITOR: 'editor',
+}
 
 const route = useRoute()
 const router = useRouter()
@@ -88,6 +97,15 @@ const isPublicRoute = computed(() => route.meta.public === true)
 const isDeveloper = computed(() => actualRole.value === 'DEVELOPER')
 const viewingLabel = computed(() => roleLabels[role.value])
 
+
+// Roles this specific user actually holds (not the full 6 — that's developer-only)
+const availableRoleOptions = computed<Role[]>(() => {
+  const options = userRoles.value
+    .map((name) => roleMap[name])
+    .filter((value): value is Role => Boolean(value))
+  return [...new Set(options)]
+})
+
 function switchDashboard(nextRole: Role) {
   if (!isDeveloper.value) return
 
@@ -95,6 +113,50 @@ function switchDashboard(nextRole: Role) {
   mobileMenuOpen.value = false
 
   router.push(`/${nextRole}/dashboard`)
+}
+
+/*
+ * "My freelance work" — for a non-developer with more than one role
+ * (e.g. Manager + Videographer + Video editor). Lets them step into a
+ * freelance workspace without losing their way back, instead of the
+ * developer-only "View as" switcher below.
+ */
+const FREELANCE_ROLES: Role[] = ['videographer', 'photographer', 'editor']
+const freelanceOrigin = ref<Role | null>(null)
+const showFreelancePicker = ref(false)
+
+const freelanceRoleOptions = computed<Role[]>(() =>
+  availableRoleOptions.value.filter(
+    (option) => FREELANCE_ROLES.includes(option) && option !== role.value,
+  ),
+)
+
+function enterFreelanceRole(target: Role) {
+  if (!freelanceOrigin.value) {
+    freelanceOrigin.value = role.value
+  }
+  role.value = target
+  showFreelancePicker.value = false
+  mobileMenuOpen.value = false
+  router.push(`/${target}/dashboard`)
+}
+
+function openFreelanceWork() {
+  if (freelanceRoleOptions.value.length === 1) {
+    enterFreelanceRole(freelanceRoleOptions.value[0])
+    return
+  }
+  showFreelancePicker.value = !showFreelancePicker.value
+}
+
+function exitFreelanceWork() {
+  if (!freelanceOrigin.value) return
+  const target = freelanceOrigin.value
+  freelanceOrigin.value = null
+  showFreelancePicker.value = false
+  role.value = target
+  mobileMenuOpen.value = false
+  router.push(`/${target}/dashboard`)
 }
 
 async function signOut() {
@@ -138,7 +200,7 @@ const navigation = computed(() => {
       { label: 'Invoices', icon: FileCheck2, to: '/manager/invoices' },
       { label: 'Jobs', icon: BriefcaseBusiness, to: '/manager/jobs' },
       { label: 'Add users', icon: UserPlus, to: '/manager/team' },
-      { label: 'Affiliate payments', icon: CircleDollarSign, to: '/manager/payments' },
+      { label: 'Payouts & Revenue', icon: WalletCards, to: '/manager/payouts' },
       { label: 'Settings', icon: Settings, to: '/manager/settings' },
     ]
   }
@@ -166,26 +228,12 @@ const navigation = computed(() => {
   ]
 })
 
-let authSubscription: { subscription: { unsubscribe: () => void } } | null = null
-
-function resetSessionState() {
-  role.value = 'manager'
-  actualRole.value = ''
-  userName.value = ''
-  userRoles.value = []
-  hasManagerAccess.value = false
-}
-
-async function loadCurrentUserSession() {
-  resetSessionState()
-
+onMounted(async () => {
   const {
     data: { user },
   } = await supabase.auth.getUser()
 
-  if (!user) {
-    return
-  }
+  if (!user) return
 
   const metaName =
     user.user_metadata?.full_name ||
@@ -199,15 +247,6 @@ async function loadCurrentUserSession() {
     .maybeSingle()
 
   userName.value = profile?.full_name || metaName || ''
-
-  const roleMap: Record<string, Role> = {
-    DEVELOPER: 'developer',
-    MANAGER: 'manager',
-    SALESMAN: 'sales',
-    VIDEOGRAPHER: 'videographer',
-    PHOTOGRAPHER: 'photographer',
-    VIDEO_EDITOR: 'editor',
-  }
 
   const { data: primaryRole } = profile?.role_id
     ? await supabase
@@ -265,22 +304,6 @@ async function loadCurrentUserSession() {
   if (activeRole && roleMap[activeRole]) {
     role.value = roleMap[activeRole]
   }
-}
-
-onMounted(async () => {
-  await loadCurrentUserSession()
-
-  const { data } = supabase.auth.onAuthStateChange(async (event) => {
-    if (event === 'SIGNED_IN' || event === 'SIGNED_OUT' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
-      await loadCurrentUserSession()
-    }
-  })
-
-  authSubscription = data
-})
-
-onUnmounted(() => {
-  authSubscription?.subscription.unsubscribe()
 })
 </script>
 
@@ -309,6 +332,24 @@ onUnmounted(() => {
           <span>{{ item.label }}</span>
         </RouterLink>
       </nav>
+
+      <div v-if="!isDeveloper && freelanceRoleOptions.length" class="nav-freelance-block">
+        <button type="button" class="nav-freelance-toggle" @click="openFreelanceWork">
+          <Film :size="18" :stroke-width="1.8" />
+          <span>My freelance work</span>
+        </button>
+
+        <div v-if="showFreelancePicker && freelanceRoleOptions.length > 1" class="nav-freelance-picker">
+          <button
+            v-for="option in freelanceRoleOptions"
+            :key="option"
+            type="button"
+            @click="enterFreelanceRole(option)"
+          >
+            {{ roleLabels[option] }}
+          </button>
+        </div>
+      </div>
 
       <div class="sidebar-bottom">
         <div class="sidebar-note">
@@ -342,11 +383,17 @@ onUnmounted(() => {
 
         <div>
           <p class="eyebrow">
-            {{
-              isDeveloper
-                ? `Developer Mode — Viewing as ${viewingLabel}`
-                : `${currentRole.label} workspace`
-            }}
+            <button
+              v-if="freelanceOrigin"
+              type="button"
+              class="breadcrumb-back"
+              @click="exitFreelanceWork"
+            >
+              {{ roleLabels[freelanceOrigin] }} workspace
+            </button>
+            <template v-if="freelanceOrigin"> › {{ viewingLabel }}</template>
+            <template v-else-if="isDeveloper">Developer Mode — Viewing as {{ viewingLabel }}</template>
+            <template v-else>{{ currentRole.label }} workspace</template>
           </p>
 
           <h1>{{ pageTitle }}</h1>
@@ -392,11 +439,7 @@ onUnmounted(() => {
         <RouterView />
       </section>
 
-      <nav
-        class="bottom-nav"
-        :class="{ 'bottom-nav--hidden': mobileMenuOpen }"
-        aria-label="Mobile navigation"
-      >
+      <nav class="bottom-nav" aria-label="Mobile navigation">
         <RouterLink
           v-for="item in navigation.slice(0, 4)"
           :key="item.to"
@@ -407,7 +450,72 @@ onUnmounted(() => {
           <component :is="item.icon" :size="19" />
           <span>{{ item.label }}</span>
         </RouterLink>
+
+        <button
+          class="bottom-nav-item"
+          type="button"
+          @click="mobileMenuOpen = true"
+        >
+          <MoreHorizontal :size="19" />
+          <span>More</span>
+        </button>
       </nav>
     </main>
   </div>
 </template>
+
+<style scoped>
+.nav-freelance-block {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 0.5px solid rgba(255, 255, 255, 0.1);
+}
+.nav-freelance-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.55rem 0.75rem;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  color: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  text-align: left;
+}
+.nav-freelance-toggle:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+.nav-freelance-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.25rem 0 0.25rem 2.1rem;
+}
+.nav-freelance-picker button {
+  padding: 0.4rem 0.6rem;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: inherit;
+  font-size: 0.8rem;
+  text-align: left;
+  cursor: pointer;
+  opacity: 0.85;
+}
+.nav-freelance-picker button:hover {
+  background: rgba(255, 255, 255, 0.06);
+  opacity: 1;
+}
+.breadcrumb-back {
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+</style>

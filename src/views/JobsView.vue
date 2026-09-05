@@ -7,15 +7,67 @@ import { supabase } from '../lib/supabase'
 const route = useRoute()
 const isManager = computed(() => route.meta.role === 'manager')
 
-type Job = { id: string; job_number: string; event_type: string; event_date: string; event_location: string | null; status: string; production_brief: string | null; invoice_id: string | null; deposit_status: string | null; gdrive_url: string | null }
+type Job = { id: string; job_number: string; event_type: string; event_date: string; event_location: string | null; status: string; production_brief: string | null; invoice_id: string | null; deposit_status: string | null; gdrive_url: string | null; package_id: string | null }
 type Assignment = { id: string; role: string; status: string; profile: { full_name: string } | null }
 type Compensation = { type: 'FIXED' | 'PERCENT'; value: number }
 const jobs = ref<Job[]>([]); const selected = ref<Job | null>(null); const assignments = ref<Assignment[]>([]); const counts = ref({ VIDEOGRAPHER: 0, PHOTOGRAPHER: 0, VIDEO_EDITOR: 0 }); const compensation = ref<Record<string, Compensation>>({ VIDEOGRAPHER: { type: 'FIXED', value: 0 }, PHOTOGRAPHER: { type: 'FIXED', value: 0 }, VIDEO_EDITOR: { type: 'FIXED', value: 0 } }); const brief = ref(''); const gdriveUrl = ref(''); const busy = ref(false); const error = ref(''); const message = ref('')
 const alreadyReleased = computed(() => Boolean(selected.value && selected.value.status !== 'RELEASED' && selected.value.status !== 'WAITING_DEPOSIT'))
 const canEdit = computed(() => isManager.value || !alreadyReleased.value)
 function errorMessage(caught: unknown) { if (caught && typeof caught === 'object' && 'message' in caught) return String((caught as { message: unknown }).message); return caught instanceof Error ? caught.message : 'Request failed. Please try again.' }
-async function load() { const { data, error: loadError } = await supabase.from('jobs').select('id, job_number, event_type, event_date, event_location, status, production_brief, invoice_id, gdrive_url').neq('status', 'CANCELLED').order('event_date'); if (loadError) { error.value = loadError.message; return }; const invoiceIds = (data ?? []).map((job) => job.invoice_id).filter(Boolean) as string[]; const { data: invoices } = invoiceIds.length ? await supabase.from('invoices').select('id, payment_status').in('id', invoiceIds) : { data: [] }; jobs.value = (data ?? []).map((job) => ({ ...job, deposit_status: invoices?.find((invoice) => invoice.id === job.invoice_id)?.payment_status ?? null })) }
-async function selectJob(job: Job) { selected.value = job; brief.value = job.production_brief ?? ''; gdriveUrl.value = job.gdrive_url ?? ''; const [{ data }, { data: assignmentData }] = await Promise.all([supabase.from('job_requirements').select('role, quantity, compensation_type, compensation_value').eq('job_id', job.id), supabase.from('job_assignments').select('id, role, status, profile:profiles(full_name)').eq('job_id', job.id)]); assignments.value = (assignmentData ?? []) as unknown as Assignment[]; counts.value = { VIDEOGRAPHER: data?.find((item) => item.role === 'VIDEOGRAPHER')?.quantity ?? 0, PHOTOGRAPHER: data?.find((item) => item.role === 'PHOTOGRAPHER')?.quantity ?? 0, VIDEO_EDITOR: data?.find((item) => item.role === 'VIDEO_EDITOR')?.quantity ?? 0 }; compensation.value = Object.fromEntries(['VIDEOGRAPHER', 'PHOTOGRAPHER', 'VIDEO_EDITOR'].map((role) => { const item = data?.find((row) => row.role === role); return [role, { type: (item?.compensation_type ?? 'FIXED') as 'FIXED' | 'PERCENT', value: item?.compensation_value ?? 0 }] })) }
+async function load() { const { data, error: loadError } = await supabase.from('jobs').select('id, job_number, event_type, event_date, event_location, status, production_brief, invoice_id, gdrive_url, package_id').neq('status', 'CANCELLED').order('event_date'); if (loadError) { error.value = loadError.message; return }; const invoiceIds = (data ?? []).map((job) => job.invoice_id).filter(Boolean) as string[]; const { data: invoices } = invoiceIds.length ? await supabase.from('invoices').select('id, payment_status').in('id', invoiceIds) : { data: [] }; jobs.value = (data ?? []).map((job) => ({ ...job, deposit_status: invoices?.find((invoice) => invoice.id === job.invoice_id)?.payment_status ?? null })) }
+
+async function selectJob(job: Job) {
+  selected.value = job
+  brief.value = job.production_brief ?? ''
+  gdriveUrl.value = job.gdrive_url ?? ''
+
+  const [{ data }, { data: assignmentData }] = await Promise.all([
+    supabase.from('job_requirements').select('role, quantity, compensation_type, compensation_value').eq('job_id', job.id),
+    supabase.from('job_assignments').select('id, role, status, profile:profiles(full_name)').eq('job_id', job.id),
+  ])
+  assignments.value = (assignmentData ?? []) as unknown as Assignment[]
+
+  if (data && data.length) {
+    // Job already has requirements set (first release, or re-editing) — use those.
+    counts.value = {
+      VIDEOGRAPHER: data.find((item) => item.role === 'VIDEOGRAPHER')?.quantity ?? 0,
+      PHOTOGRAPHER: data.find((item) => item.role === 'PHOTOGRAPHER')?.quantity ?? 0,
+      VIDEO_EDITOR: data.find((item) => item.role === 'VIDEO_EDITOR')?.quantity ?? 0,
+    }
+    compensation.value = Object.fromEntries(['VIDEOGRAPHER', 'PHOTOGRAPHER', 'VIDEO_EDITOR'].map((role) => {
+      const item = data.find((row) => row.role === role)
+      return [role, { type: (item?.compensation_type ?? 'FIXED') as 'FIXED' | 'PERCENT', value: item?.compensation_value ?? 0 }]
+    }))
+    return
+  }
+
+  // No requirements yet — auto-fill from the linked package's default rate card, if any.
+  counts.value = { VIDEOGRAPHER: 0, PHOTOGRAPHER: 0, VIDEO_EDITOR: 0 }
+  compensation.value = { VIDEOGRAPHER: { type: 'FIXED', value: 0 }, PHOTOGRAPHER: { type: 'FIXED', value: 0 }, VIDEO_EDITOR: { type: 'FIXED', value: 0 } }
+
+  if (!job.package_id) return
+
+  const { data: pkg } = await supabase
+    .from('packages')
+    .select('videographer_compensation_type, videographer_compensation_value, photographer_compensation_type, photographer_compensation_value, editor_compensation_type, editor_compensation_value')
+    .eq('id', job.package_id)
+    .maybeSingle()
+
+  if (!pkg) return
+
+  if (pkg.videographer_compensation_value) {
+    counts.value.VIDEOGRAPHER = 1
+    compensation.value.VIDEOGRAPHER = { type: (pkg.videographer_compensation_type ?? 'FIXED') as 'FIXED' | 'PERCENT', value: Number(pkg.videographer_compensation_value) }
+  }
+  if (pkg.photographer_compensation_value) {
+    counts.value.PHOTOGRAPHER = 1
+    compensation.value.PHOTOGRAPHER = { type: (pkg.photographer_compensation_type ?? 'FIXED') as 'FIXED' | 'PERCENT', value: Number(pkg.photographer_compensation_value) }
+  }
+  if (pkg.editor_compensation_value) {
+    counts.value.VIDEO_EDITOR = 1
+    compensation.value.VIDEO_EDITOR = { type: (pkg.editor_compensation_type ?? 'FIXED') as 'FIXED' | 'PERCENT', value: Number(pkg.editor_compensation_value) }
+  }
+}
 async function saveSetup() { if (!selected.value) return; if (!canEdit.value) { error.value = 'Only managers can edit a job that has already been released.'; return }; if (!counts.value.VIDEOGRAPHER && !counts.value.PHOTOGRAPHER && !counts.value.VIDEO_EDITOR) { error.value = 'Select at least one required team role.'; return }; if (selected.value.deposit_status !== 'DEPOSIT_VERIFIED') { error.value = 'Verify the deposit before releasing this job.'; return }; if (Object.entries(counts.value).some(([role, quantity]) => quantity > 0 && compensation.value[role].value <= 0)) { error.value = 'Set compensation greater than zero for every required role.'; return }; busy.value = true; error.value = ''; try { const jobId = selected.value.id; const requirements = Object.entries(counts.value).filter(([, quantity]) => quantity > 0).map(([role, quantity]) => ({ role, quantity, compensation_type: compensation.value[role].type, compensation_value: compensation.value[role].value })); const { error: releaseError } = await supabase.rpc('release_job_setup', { target_job_id: jobId, target_brief: brief.value, target_requirements: requirements, target_gdrive_url: gdriveUrl.value }); if (releaseError) throw releaseError; message.value = 'Job released to eligible freelancers.'; await load(); await selectJob(jobs.value.find((job) => job.id === jobId) ?? selected.value) } catch (caught) { console.error('Save and release job failed', caught); error.value = errorMessage(caught) } finally { busy.value = false } }
 async function confirmAssignment(assignment: Assignment, approve: boolean) { const { error: confirmError } = await supabase.rpc('confirm_assignment', { target_assignment_id: assignment.id, approve }); if (confirmError) error.value = confirmError.message; else { message.value = approve ? 'Assignment confirmed.' : 'Assignment declined.'; if (selected.value) await load(); await selectJob(jobs.value.find((job) => job.id === selected.value?.id) ?? selected.value!) } }
 async function cancelJob(job: Job) { if (!window.confirm(`Cancel ${job.job_number}?`)) return; const { error: cancelError } = await supabase.rpc('manager_cancel_record', { record_type: 'JOB', record_id: job.id }); if (cancelError) error.value = cancelError.message; else { message.value = 'Job cancelled and assignments closed.'; await load(); selected.value = null } }
@@ -34,6 +86,7 @@ onMounted(load)
         <div class="panel-heading"><div><p class="eyebrow">{{ selected.job_number }}</p><h3>{{ selected.event_type }}</h3><p class="muted">{{ selected.event_date }} · {{ selected.event_location || 'Location pending' }}</p></div><CheckCircle2 :size="22" class="panel-icon" /></div>
         <div class="deposit-check"><span>Deposit: <strong>{{ selected.deposit_status || 'Not linked' }}</strong></span></div>
         <p v-if="alreadyReleased && !isManager" class="form-message">This job has already been released — only managers can edit it now.</p>
+        <p v-if="!alreadyReleased && selected.package_id" class="form-message">Team and pay pre-filled from the package's default rate card — adjust if this job needs something different.</p>
         <fieldset :disabled="!canEdit"><legend>Required team and pay</legend><div v-for="item in [['VIDEOGRAPHER','Videographers'],['PHOTOGRAPHER','Photographers'],['VIDEO_EDITOR','Video editors']]" :key="item[0]" class="requirement-row"><label><span>{{ item[1] }}</span><input v-model.number="counts[item[0] as keyof typeof counts]" min="0" max="20" type="number" /></label><label><span>Pay type</span><select v-model="compensation[item[0]].type"><option value="FIXED">Fixed RM</option><option value="PERCENT">Percentage</option></select></label><label><span>{{ compensation[item[0]].type === 'PERCENT' ? 'Percent' : 'Amount (RM)' }}</span><input v-model.number="compensation[item[0]].value" min="0" step="0.01" type="number" /></label></div></fieldset>
         <label><span>Production briefing</span><textarea v-model="brief" :disabled="!canEdit" rows="7" placeholder="Key details for the production team"></textarea></label>
         <button class="primary-button" :disabled="busy || selected.deposit_status !== 'DEPOSIT_VERIFIED' || !canEdit" type="submit"><Save :size="16" />{{ busy ? (alreadyReleased ? 'Saving...' : 'Releasing...') : (alreadyReleased ? 'Save changes' : 'Save & release job') }}</button>
