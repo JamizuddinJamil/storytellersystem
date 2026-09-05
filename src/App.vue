@@ -11,7 +11,6 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
-  MoreHorizontal,
   Package,
   Settings,
   ShieldCheck,
@@ -451,14 +450,6 @@ onMounted(async () => {
           <span>{{ item.label }}</span>
         </RouterLink>
 
-        <button
-          class="bottom-nav-item"
-          type="button"
-          @click="mobileMenuOpen = true"
-        >
-          <MoreHorizontal :size="19" />
-          <span>More</span>
-        </button>
       </nav>
     </main>
   </div>
